@@ -83,7 +83,7 @@ if candidates:
     message += f"Total kandidat: {len(candidates)}\n\n"
     
     for i, c in enumerate(candidates[:5], start=1):
-        message += f"{i}. {c['stock']} | RSI: {c['rsi']} | Vol x{c['vol_ratio']}\n"
+        message += f"{i}. {c['stock']} | RSI {c['rsi']} | Vol x{c['vol_ratio']} | Room {c['room']}%\n"
 else:
     message = f"⏳ IDX Screener ({now})\nTidak ada kandidat saat ini."
 
