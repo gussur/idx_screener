@@ -21,16 +21,32 @@ for stock in stocks:
         data["rsi"] = ta.momentum.RSIIndicator(data["Close"], window=14).rsi()
         data["ma20"] = data["Close"].rolling(20).mean()
 
+        avg_volume = data["Volume"].rolling(20).mean()
+        volume_ratio = data["Volume"].iloc[-1] / avg_volume.iloc[-1]
+
         latest = data.iloc[-1]
 
-        if latest["Close"] > latest["ma20"] and latest["rsi"] > 60:
-            candidates.append(stock)
+        if (
+            latest["Close"] > latest["ma20"] and
+            latest["rsi"] > 55 and
+            volume_ratio > 1.3
+        ):
+            candidates.append({
+                "stock": stock,
+                "rsi": round(latest["rsi"], 1),
+                "vol_ratio": round(volume_ratio, 2)
+            })
 
     except Exception as e:
         print(f"Error processing {stock}: {e}")
 
+# Urutkan berdasarkan volume ratio terbesar
+candidates = sorted(candidates, key=lambda x: x["vol_ratio"], reverse=True)
+
 if candidates:
-    message = "📈 Kandidat:\n" + "\n".join(candidates)
+    message = "📈 Kandidat:\n\n"
+    for i, c in enumerate(candidates[:5], start=1):
+        message += f"{i}. {c['stock']} | RSI: {c['rsi']} | Vol x{c['vol_ratio']}\n"
 else:
     message = "Tidak ada kandidat saat ini."
 
