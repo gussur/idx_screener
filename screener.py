@@ -7,7 +7,7 @@ import os
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-stocks = ["BBCA.JK", "BMRI.JK", "TLKM.JK", "ASII.JK"]
+stocks = pd.read_csv("stocks.csv", header=None)[0].tolist()
 
 candidates = []
 
