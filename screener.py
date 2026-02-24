@@ -26,43 +26,43 @@ for stock in stocks:
 
         latest = data.iloc[-1]
 
-# ===== MODE A FULL AUTO =====
+        # ===== MODE A FULL AUTO =====
 
-# Morning high (UTC 02:00–02:30 = 09:00–09:30 WIB)
-morning_data = data.between_time("02:00", "02:30")
-if morning_data.empty:
-    continue
+        # Morning high (UTC 02:00–02:30 = 09:00–09:30 WIB)
+        morning_data = data.between_time("02:00", "02:30")
+        if morning_data.empty:
+            continue
 
-morning_high = morning_data["High"].max()
+        morning_high = morning_data["High"].max()
 
-# Volume spike
-last_vol = data["Volume"].iloc[-1]
-avg_vol_10 = data["Volume"].rolling(10).mean().iloc[-1]
-vol_ratio = last_vol / avg_vol_10
-vol_spike = vol_ratio > 1.5
+        # Volume spike
+        last_vol = data["Volume"].iloc[-1]
+        avg_vol_10 = data["Volume"].rolling(10).mean().iloc[-1]
+        vol_ratio = last_vol / avg_vol_10
+        vol_spike = vol_ratio > 1.5
 
-# Breakout sesi pagi
-breakout = latest["Close"] > morning_high
+        # Breakout sesi pagi
+        breakout = latest["Close"] > morning_high
 
-# Resistance 5 hari terakhir
-resistance = data["High"].rolling(100).max().iloc[-1]
-distance = (resistance - latest["Close"]) / latest["Close"]
-room_ok = distance > 0.02  # minimal 2% ruang
+        # Resistance 5 hari terakhir
+        resistance = data["High"].rolling(100).max().iloc[-1]
+        distance = (resistance - latest["Close"]) / latest["Close"]
+        room_ok = distance > 0.02  # minimal 2% ruang
 
-# Final Decision Engine
-if (
-    breakout and
-    vol_spike and
-    latest["rsi"] > 55 and
-    latest["Close"] > latest["ma20"] and
-    room_ok
-):
-    candidates.append({
-        "stock": stock,
-        "rsi": round(latest["rsi"], 1),
-        "vol_ratio": round(vol_ratio, 2),
-        "room": round(distance * 100, 2)
-    })
+        # Final Decision Engine
+        if (
+            breakout and
+            vol_spike and
+            latest["rsi"] > 55 and
+            latest["Close"] > latest["ma20"] and
+            room_ok
+        ):
+            candidates.append({
+            "stock": stock,
+            "rsi": round(latest["rsi"], 1),
+            "vol_ratio": round(vol_ratio, 2),
+            "room": round(distance * 100, 2)
+        })
 
     except Exception as e:
         print(f"Error processing {stock}: {e}")
