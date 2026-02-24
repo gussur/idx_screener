@@ -41,14 +41,24 @@ for stock in stocks:
         print(f"Error processing {stock}: {e}")
 
 # Urutkan berdasarkan volume ratio terbesar
+from datetime import datetime
+import pytz
+
+# waktu WIB
+wib = pytz.timezone("Asia/Jakarta")
+now = datetime.now(wib).strftime("%H:%M WIB")
+
+# Urutkan berdasarkan volume ratio terbesar
 candidates = sorted(candidates, key=lambda x: x["vol_ratio"], reverse=True)
 
 if candidates:
-    message = "📈 Kandidat:\n\n"
+    message = f"📈 IDX Screener ({now})\n\n"
+    message += f"Total kandidat: {len(candidates)}\n\n"
+    
     for i, c in enumerate(candidates[:5], start=1):
         message += f"{i}. {c['stock']} | RSI: {c['rsi']} | Vol x{c['vol_ratio']}\n"
 else:
-    message = "Tidak ada kandidat saat ini."
+    message = f"⏳ IDX Screener ({now})\nTidak ada kandidat saat ini."
 
 requests.get(
     f"https://api.telegram.org/bot{TOKEN}/sendMessage",
