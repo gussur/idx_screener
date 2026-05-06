@@ -1,59 +1,49 @@
 import yfinance as yf
 import pandas as pd
-import ta
 import requests
 import os
 from datetime import datetime
 import pytz
 
-TOKEN = os.environ.get("TELEGRAM_TOKEN")
+TOKEN   = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 # ─────────────────────────────────────────────
-# FETCH ALL IDX STOCKS (~900 saham)
+# SETTINGS — sesuaikan jika perlu
+# ─────────────────────────────────────────────
+MA_WINDOW         = 20
+PRICE_ABOVE_MA    = 1.01   # Harga sekarang minimal 1% di atas MA20
+PRICE_BELOW_MA    = 0.99   # Harga sebelumnya maksimal 1% di bawah MA20
+VOL_RATIO_MIN     = 1.5    # Volume candle terakhir vs MA20 volume
+MIN_PRICE         = 50     # Filter saham gorengan
+MIN_AVG_VALUE_IDR = 1_000_000_000  # Rp 1 miliar/hari (likuiditas minimum)
+MAX_CANDIDATES    = 10
+INTERVAL          = "15m"
+PERIOD            = "5d"
+
+# ─────────────────────────────────────────────
+# FETCH SEMUA SAHAM IDX
 # ─────────────────────────────────────────────
 def get_all_idx_stocks():
-    """
-    Ambil semua saham IDX dari API resmi idx.co.id.
-    Fallback ke stocks.csv jika gagal.
-    """
     try:
         url = "https://www.idx.co.id/primary/StockData/GetSecuritiesStock"
         params = {"start": 0, "length": 9999, "s": "Kode", "d": "asc"}
         headers = {
             "X-Requested-With": "XMLHttpRequest",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            "User-Agent": "Mozilla/5.0"
         }
-        resp = requests.get(url, params=params, headers=headers, timeout=20)
-        data = resp.json()
+        resp   = requests.get(url, params=params, headers=headers, timeout=20)
+        data   = resp.json()
         stocks = [item["Kode"] + ".JK" for item in data["data"] if item.get("Kode")]
-        print(f"[IDX API] Berhasil fetch {len(stocks)} saham.")
         return stocks
     except Exception as e:
-        print(f"[IDX API] Gagal: {e} — Fallback ke stocks.csv")
+        print(f"[IDX API] Gagal: {e} — fallback ke stocks.csv")
         try:
             return pd.read_csv("stocks.csv", header=None)[0].tolist()
         except Exception:
             return []
 
 stocks = get_all_idx_stocks()
-print(f"Total saham yang akan discreen: {len(stocks)}")
-
-# ─────────────────────────────────────────────
-# INTRADAY FILTER SETTINGS
-# ─────────────────────────────────────────────
-# Tuning parameter — ubah sesuai kondisi pasar
-MIN_PRICE          = 100       # Hindari saham < Rp100 (fraksi lebar, spread besar)
-MIN_AVG_VALUE_IDR  = 2_000_000_000  # Minimum nilai transaksi rata-rata: Rp 2 miliar/hari
-                                    # (proxy likuiditas intraday)
-VOL_SPIKE_RATIO    = 1.5       # Volume candle terakhir vs rata-rata 10 candle
-RSI_MIN_MOMENTUM   = 52        # Mode breakout/momentum
-RSI_MAX_REVERSAL   = 38        # Mode reversal (oversold bounce)
-RSI_REVERSAL_NOW   = 42        # RSI sudah naik ke atas level ini saat reversal
-ROOM_TO_RESISTANCE = 0.015     # Minimal 1.5% ruang ke resistance
-MA_WINDOW          = 20
-RSI_WINDOW         = 14
-MAX_CANDIDATES     = 8         # Maksimal kandidat yang dikirim ke Telegram
 
 # ─────────────────────────────────────────────
 # SCREENING LOOP
@@ -62,143 +52,79 @@ candidates = []
 
 for stock in stocks:
     try:
-        data = yf.download(stock, interval="15m", period="5d", progress=False, auto_adjust=True)
+        data = yf.download(stock, interval=INTERVAL, period=PERIOD,
+                           progress=False, auto_adjust=True)
 
-        if len(data) < 50:
+        if len(data) < MA_WINDOW + 5:
             continue
 
-        # ── Indikator ──
         close = data["Close"].squeeze()
-        high  = data["High"].squeeze()
-        low   = data["Low"].squeeze()
         vol   = data["Volume"].squeeze()
 
-        data["rsi"]  = ta.momentum.RSIIndicator(close, window=RSI_WINDOW).rsi()
-        data["ma20"] = close.rolling(MA_WINDOW).mean()
+        ma20     = close.rolling(MA_WINDOW).mean()
+        vol_ma20 = vol.rolling(MA_WINDOW).mean()
 
-        latest = data.iloc[-1]
-        prev   = data.iloc[-2]
+        price_now  = float(close.iloc[-1])
+        price_prev = float(close.iloc[-2])
+        ma_now     = float(ma20.iloc[-1])
+        ma_prev    = float(ma20.iloc[-2])
+        vol_now    = float(vol.iloc[-1])
+        vol_ma_now = float(vol_ma20.iloc[-1])
 
-        # ── Filter Likuiditas ──
-        price = float(latest["Close"])
-        if price < MIN_PRICE:
+        # ── Filter likuiditas ──
+        if price_now < MIN_PRICE:
             continue
-
-        # Estimasi nilai transaksi harian (volume * harga * 4 sesi per hari ≈ 26 candle 15m)
-        avg_daily_value = float(vol.rolling(20).mean().iloc[-1]) * price * 26
+        avg_daily_value = vol_ma_now * price_now * 26
         if avg_daily_value < MIN_AVG_VALUE_IDR:
             continue
 
-        # ── Data Derivatif ──
-        rsi_now  = float(latest["rsi"])
-        rsi_prev = float(prev["rsi"])
-        ma20     = float(latest["ma20"])
-        last_close = float(latest["Close"])
+        # ── Sinyal Break MA20 ──
+        cross_up  = (price_prev < ma_prev * PRICE_BELOW_MA) and (price_now > ma_now * PRICE_ABOVE_MA)
+        vol_spike = (vol_now / vol_ma_now) >= VOL_RATIO_MIN if vol_ma_now > 0 else False
 
-        vol_avg10  = float(vol.rolling(10).mean().iloc[-1])
-        vol_ratio  = float(vol.iloc[-1]) / vol_avg10 if vol_avg10 > 0 else 0
-        vol_spike  = vol_ratio > VOL_SPIKE_RATIO
-
-        resistance = float(high.rolling(100).max().iloc[-1])
-        distance   = (resistance - last_close) / last_close
-        room_ok    = distance > ROOM_TO_RESISTANCE
-
-        # Morning high: UTC 02:00–02:30 = 09:00–09:30 WIB
-        morning_data = data.between_time("02:00", "02:30")
-        morning_high = float(morning_data["High"].max()) if not morning_data.empty else None
-
-        signal = None
-        score  = 0
-
-        # ══ MODE 1: BREAKOUT ══════════════════════════════════════════════
-        # Harga breakout di atas high sesi pagi + volume spike + RSI kuat
-        if (
-            morning_high and
-            last_close > morning_high and
-            vol_spike and
-            rsi_now > RSI_MIN_MOMENTUM and
-            last_close > ma20 and
-            room_ok
-        ):
-            signal = "Breakout"
-            score  = vol_ratio * (rsi_now / 100)
-
-        # ══ MODE 2: MOMENTUM ══════════════════════════════════════════════
-        # Trend naik bersih: harga di atas MA20, RSI > 52, volume di atas rata-rata
-        elif (
-            rsi_now > RSI_MIN_MOMENTUM and
-            rsi_now > rsi_prev and         # RSI sedang naik
-            last_close > ma20 and
-            vol_ratio > 1.2 and
-            room_ok
-        ):
-            signal = "Momentum"
-            score  = vol_ratio * (rsi_now / 100)
-
-        # ══ MODE 3: REVERSAL (Oversold Bounce) ════════════════════════════
-        # RSI sebelumnya sangat rendah, kini mulai berbalik naik + volume masuk
-        elif (
-            rsi_prev < RSI_MAX_REVERSAL and
-            rsi_now > RSI_REVERSAL_NOW and
-            vol_spike and
-            last_close > float(data["Close"].iloc[-3])  # candle naik 2 dari 3 terakhir
-        ):
-            signal = "Reversal"
-            score  = vol_ratio * ((60 - rsi_prev) / 60)  # makin oversold, makin tinggi score
-
-        if signal:
+        if cross_up and vol_spike:
+            vol_ratio = round(vol_now / vol_ma_now, 2)
+            gap_pct   = round(((price_now - ma_now) / ma_now) * 100, 2)
             candidates.append({
                 "stock":     stock.replace(".JK", ""),
-                "signal":    signal,
-                "price":     round(price),
-                "rsi":       round(rsi_now, 1),
-                "vol_ratio": round(vol_ratio, 2),
-                "room":      round(distance * 100, 2),
-                "score":     round(score, 3),
+                "price":     round(price_now),
+                "ma20":      round(ma_now),
+                "gap":       gap_pct,
+                "vol_ratio": vol_ratio,
             })
 
     except Exception as e:
         print(f"Error {stock}: {e}")
 
 # ─────────────────────────────────────────────
-# SUSUN DAN KIRIM KE TELEGRAM
+# KIRIM KE TELEGRAM
 # ─────────────────────────────────────────────
 wib = pytz.timezone("Asia/Jakarta")
 now = datetime.now(wib).strftime("%d/%m %H:%M WIB")
 
-candidates = sorted(candidates, key=lambda x: x["score"], reverse=True)
-
-SIGNAL_ICON = {
-    "Breakout":  "🚀",
-    "Momentum":  "📈",
-    "Reversal":  "🔄",
-}
+# Urutkan: volume ratio terbesar dulu
+candidates = sorted(candidates, key=lambda x: x["vol_ratio"], reverse=True)
 
 if candidates:
-    message  = f"🔍 IDX Screener ({now})\n"
-    message += f"Kandidat intraday: {len(candidates)} saham\n"
-    message += "─" * 28 + "\n\n"
+    message  = f"📊 Break MA20 Alert ({now})\n"
+    message += f"Sinyal baru: {len(candidates)} saham\n"
+    message += "─" * 26 + "\n\n"
 
     for i, c in enumerate(candidates[:MAX_CANDIDATES], start=1):
-        icon = SIGNAL_ICON.get(c["signal"], "•")
         message += (
-            f"{i}. {icon} {c['stock']} — {c['signal']}\n"
-            f"   Harga: Rp{c['price']:,}  |  RSI: {c['rsi']}\n"
-            f"   Vol: x{c['vol_ratio']}  |  Room: {c['room']}%\n\n"
+            f"{i}. {c['stock']}\n"
+            f"   Harga: Rp{c['price']:,}  |  MA20: Rp{c['ma20']:,}\n"
+            f"   Gap: +{c['gap']}%  |  Vol: x{c['vol_ratio']}\n\n"
         )
 
     if len(candidates) > MAX_CANDIDATES:
-        message += f"...dan {len(candidates) - MAX_CANDIDATES} kandidat lainnya.\n"
-else:
-    message = (
-        f"⏳ IDX Screener ({now})\n"
-        f"Belum ada kandidat yang memenuhi kriteria intraday."
+        message += f"...dan {len(candidates) - MAX_CANDIDATES} saham lainnya.\n"
+
+    requests.get(
+        f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+        params={"chat_id": CHAT_ID, "text": message},
+        timeout=10,
     )
-
-print(message)
-
-requests.get(
-    f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-    params={"chat_id": CHAT_ID, "text": message},
-    timeout=10,
-)
+else:
+    # Tidak kirim pesan kalau tidak ada sinyal — tidak ada notif "Tidak ada kandidat"
+    print(f"[{now}] Tidak ada sinyal Break MA20.")
