@@ -28,17 +28,21 @@ BRK_ABOVE         = 1.003
 BRK_PREV          = 1.00
 BRK_VOL_MIN       = 1.5
 
+# ── Filter Tren Harian ──────────────────────
+# Sinyal 15m hanya lolos jika tren harian tidak bearish
+# Kondisi GUGUR jika salah satu benar:
+#   - Harga harian < MA20 harian (tren turun)
+#   - MA20 harian < MA50 harian (death cross)
+#   - MACD histogram harian < threshold (momentum turun tajam)
+DAILY_MACD_MIN    = -3.0   # MACD histogram harian boleh negatif tapi tidak terlalu dalam
+                            # Sesuaikan per saham — untuk harga ratusan cukup -3.0
+
 PRIORITY_STOCKS = {
     "WIIM", "MDKA", "GTSI", "MSIN",
     "EXCL", "ANTM", "MAPA", "BREN",
 }
 
-# ─────────────────────────────────────────────
-# FALLBACK LIST — 150 saham IDX liquid
-# Dipakai jika IDX API gagal
-# ─────────────────────────────────────────────
 FALLBACK_STOCKS = [
-    # LQ45
     "BBCA.JK","BBRI.JK","BMRI.JK","BBNI.JK","TLKM.JK",
     "ASII.JK","ICBP.JK","INDF.JK","UNVR.JK","PGAS.JK",
     "ADRO.JK","PTBA.JK","ANTM.JK","MDKA.JK","TINS.JK",
@@ -48,33 +52,27 @@ FALLBACK_STOCKS = [
     "AMRT.JK","ACES.JK","MYOR.JK","AALI.JK","LSIP.JK",
     "INKP.JK","TKIM.JK","TBIG.JK","TOWR.JK","ESSA.JK",
     "BRIS.JK","BTPS.JK","SIDO.JK","EMTK.JK","FILM.JK",
-    # Mid cap aktif
     "BBKP.JK","NISP.JK","BNGA.JK","BJTM.JK","BJBR.JK",
     "PNBN.JK","AGRO.JK","PTPP.JK","ADHI.JK","NRCA.JK",
     "TOTL.JK","JKON.JK","WTON.JK","JSMR.JK","BIRD.JK",
     "GIAA.JK","RALS.JK","LPPF.JK","MAPI.JK","MIDI.JK",
     "DMAS.JK","SSIA.JK","KIJA.JK","BEST.JK","DILD.JK",
     "APLN.JK","SMRA.JK","LPKR.JK","MTEL.JK","PGEO.JK",
-    "WTON.JK","KPIG.JK","FAST.JK","MSIN.JK","MPPA.JK",
-    "BBTN.JK","SDRA.JK","BJTM.JK","BJBR.JK","MKPI.JK",
-    # Small cap likuid
+    "KPIG.JK","FAST.JK","MSIN.JK","MPPA.JK","BBTN.JK",
     "WIFI.JK","PACK.JK","BBYB.JK","ARTO.JK","BREN.JK",
     "CUAN.JK","AMMN.JK","MBMA.JK","NCKL.JK","MPMX.JK",
     "MAPA.JK","HRUM.JK","ITMG.JK","BYAN.JK","DEWA.JK",
     "MBSS.JK","GGRM.JK","HMSP.JK","WIIM.JK","PYFA.JK",
     "TSPC.JK","SCMA.JK","MNCN.JK","BMTR.JK","SRTG.JK",
     "MLPL.JK","MEDC.JK","INCO.JK","TOBA.JK","ABMM.JK",
-    "GTSI.JK","MARK.JK","KBLV.JK","MLIA.JK","KAEF.JK",
-    # Sektoral tambahan
-    "DLTA.JK","MLBI.JK","SKBM.JK","ULTJ.JK","CLEO.JK",
-    "BBTN.JK","BNLI.JK","NISP.JK","PNBN.JK","BNGA.JK",
+    "GTSI.JK","MARK.JK","KBLV.JK","KAEF.JK","DLTA.JK",
+    "MLBI.JK","SKBM.JK","ULTJ.JK","CLEO.JK","BBTN.JK",
 ]
 
 # ─────────────────────────────────────────────
 # FETCH SAHAM IDX
 # ─────────────────────────────────────────────
 def get_all_idx_stocks():
-    # Source 1: IDX API resmi
     try:
         url  = "https://www.idx.co.id/primary/StockData/GetSecuritiesStock"
         resp = requests.get(url,
@@ -90,7 +88,6 @@ def get_all_idx_stocks():
     except Exception as e:
         print(f"[IDX API] Gagal: {e}")
 
-    # Source 2: stocks.csv lokal
     try:
         stocks = pd.read_csv("stocks.csv", header=None)[0].tolist()
         if len(stocks) > 10:
@@ -99,8 +96,7 @@ def get_all_idx_stocks():
     except Exception as e:
         print(f"[stocks.csv] Gagal: {e}")
 
-    # Source 3: hardcoded fallback
-    print(f"[Fallback] Menggunakan {len(FALLBACK_STOCKS)} saham hardcoded.")
+    print(f"[Fallback] {len(FALLBACK_STOCKS)} saham hardcoded.")
     return FALLBACK_STOCKS
 
 # ─────────────────────────────────────────────
@@ -114,6 +110,64 @@ def calc_rsi(series, window=14):
     loss  = (-delta.clip(upper=0)).rolling(window).mean()
     rs    = gain / loss.replace(0, float("nan"))
     return 100 - (100 / (1 + rs))
+
+def calc_macd(series, fast=12, slow=26, signal=9):
+    ema_fast   = series.ewm(span=fast, adjust=False).mean()
+    ema_slow   = series.ewm(span=slow, adjust=False).mean()
+    macd_line  = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    histogram  = macd_line - signal_line
+    return macd_line, signal_line, histogram
+
+def get_daily_trend(stock):
+    """
+    Ambil data harian dan evaluasi tren.
+    Return: (trend_ok, trend_label, detail)
+      trend_ok    = True jika tren harian layak untuk intraday entry
+      trend_label = 'Bullish' / 'Sideways' / 'Bearish'
+      detail      = string ringkasan untuk Telegram
+    """
+    try:
+        daily = yf.download(stock, interval="1d", period="3mo",
+                            progress=False, auto_adjust=True)
+        if len(daily) < 50:
+            return True, "Unknown", ""   # data kurang, loloskan saja
+
+        close_d  = daily["Close"].squeeze()
+        ma20_d   = close_d.rolling(20).mean()
+        ma50_d   = close_d.rolling(50).mean()
+        _, _, hist = calc_macd(close_d)
+
+        price_d  = float(close_d.iloc[-1])
+        ma20_val = float(ma20_d.iloc[-1])
+        ma50_val = float(ma50_d.iloc[-1])
+        macd_h   = float(hist.iloc[-1])
+        macd_h_prev = float(hist.iloc[-2])
+
+        # Scoring tren harian
+        # +1 tiap kondisi bullish, -1 tiap kondisi bearish
+        score = 0
+        score += 1 if price_d > ma20_val else -1
+        score += 1 if price_d > ma50_val else -1
+        score += 1 if ma20_val > ma50_val else -1   # golden cross / death cross
+        score += 1 if macd_h > macd_h_prev else -1  # MACD histogram naik
+
+        # Tren harian
+        if score >= 2:
+            trend_label = "Bullish"
+            trend_ok    = True
+        elif score == 0 or score == 1:
+            trend_label = "Sideways"
+            trend_ok    = True    # sideways tetap boleh entry
+        else:
+            trend_label = "Bearish"
+            trend_ok    = False   # bearish → skip sinyal ini
+
+        detail = f"Tren D: {trend_label} (skor {score:+d})"
+        return trend_ok, trend_label, detail
+
+    except Exception:
+        return True, "Unknown", ""   # error → loloskan, jangan block sinyal
 
 # ─────────────────────────────────────────────
 # CEK JAM
@@ -133,6 +187,7 @@ print(f"Total akan discreen: {len(stocks)} saham")
 
 priority_candidates = []
 regular_candidates  = []
+filtered_by_trend   = 0
 
 for stock in stocks:
     try:
@@ -183,15 +238,24 @@ for stock in stocks:
             signal = "Breakout"
 
         if signal:
+            # ── Filter tren harian ──
+            trend_ok, trend_label, trend_detail = get_daily_trend(stock)
+
+            if not trend_ok:
+                filtered_by_trend += 1
+                print(f"  [SKIP] {stock} — sinyal {signal} tapi tren harian {trend_label}")
+                continue
+
             dist_ma = (price_now - ma_now) / ma_now
             entry   = {
-                "stock":     stock.replace(".JK", ""),
-                "signal":    signal,
-                "price":     round(price_now),
-                "ma20":      round(ma_now),
-                "gap":       round(dist_ma * 100, 2),
-                "rsi":       round(rsi_now, 1),
-                "vol_ratio": round(vol_ratio, 2),
+                "stock":        stock.replace(".JK", ""),
+                "signal":       signal,
+                "price":        round(price_now),
+                "ma20":         round(ma_now),
+                "gap":          round(dist_ma * 100, 2),
+                "rsi":          round(rsi_now, 1),
+                "vol_ratio":    round(vol_ratio, 2),
+                "trend":        trend_label,
             }
             if stock.replace(".JK", "") in PRIORITY_STOCKS:
                 priority_candidates.append(entry)
@@ -200,6 +264,8 @@ for stock in stocks:
 
     except Exception as e:
         print(f"Error {stock}: {e}")
+
+print(f"Difilter tren bearish: {filtered_by_trend} saham")
 
 # ─────────────────────────────────────────────
 # KIRIM TELEGRAM
@@ -215,6 +281,7 @@ if not all_candidates:
     exit(0)
 
 SIGNAL_ICON = {"Pre-Breakout": "⚡", "Breakout": "✅"}
+TREND_ICON  = {"Bullish": "🟢", "Sideways": "🟡", "Unknown": "⚪"}
 
 message  = f"📡 MA20 Alert ({now_str})\n"
 message += f"Sinyal: {len(all_candidates)} saham"
@@ -224,9 +291,9 @@ if priority_candidates:
     message += "⭐ PRIORITY\n"
     message += "─" * 24 + "\n"
     for c in priority_candidates:
-        icon = SIGNAL_ICON.get(c["signal"], "•")
+        t_icon = TREND_ICON.get(c["trend"], "⚪")
         message += (
-            f"{icon} {c['stock']} — {c['signal']}\n"
+            f"{SIGNAL_ICON.get(c['signal'],'•')} {c['stock']} — {c['signal']}  {t_icon}{c['trend']}\n"
             f"   Rp{c['price']:,}  |  MA20: Rp{c['ma20']:,}  |  {c['gap']:+.2f}%\n"
             f"   RSI: {c['rsi']}  |  Vol: x{c['vol_ratio']}\n\n"
         )
@@ -235,9 +302,9 @@ if regular_candidates:
     if priority_candidates:
         message += "─" * 24 + "\n"
     for c in regular_candidates[:MAX_CANDIDATES]:
-        icon = SIGNAL_ICON.get(c["signal"], "•")
+        t_icon = TREND_ICON.get(c["trend"], "⚪")
         message += (
-            f"{icon} {c['stock']} — {c['signal']}\n"
+            f"{SIGNAL_ICON.get(c['signal'],'•')} {c['stock']} — {c['signal']}  {t_icon}{c['trend']}\n"
             f"   Rp{c['price']:,}  |  MA20: Rp{c['ma20']:,}  |  {c['gap']:+.2f}%\n"
             f"   RSI: {c['rsi']}  |  Vol: x{c['vol_ratio']}\n\n"
         )
