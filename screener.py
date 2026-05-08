@@ -112,13 +112,27 @@ if now_hour in SKIP_HOURS_WIB:
 stocks = get_all_idx_stocks()
 print(f"Total akan discreen: {len(stocks)} saham")
 
+# --- PERUBAHAN: BATCH DOWNLOAD ---
+print(f"Mendownload data secara batch (multi-threading)...")
+tickers_str = " ".join(stocks)
+# Fitur group_by="ticker" akan membuat kolom MultiIndex, memudahkan ekstraksi per saham
+batch_data = yf.download(tickers=tickers_str, interval=INTERVAL, period=PERIOD,
+                         group_by="ticker", threads=True, progress=False)
+
 priority_candidates = []
 regular_candidates  = []
 
 for stock in stocks:
     try:
-        data = yf.download(stock, interval=INTERVAL, period=PERIOD,
-                           progress=False, auto_adjust=True)
+        # --- PERUBAHAN: EKSTRAKSI DATA DARI BATCH ---
+        if len(stocks) > 1:
+            # Skip jika yfinance gagal mendownload ticker ini
+            if stock not in batch_data.columns.levels[0]:
+                continue
+            # Ambil data spesifik untuk saham ini dan buang baris kosong (NaN)
+            data = batch_data[stock].dropna()
+        else:
+            data = batch_data.dropna()
 
         if len(data) < MA_WINDOW + 5:
             continue
@@ -142,7 +156,9 @@ for stock in stocks:
             continue
         if price_now < MIN_PRICE:
             continue
-        if vol_ma_now * price_now * 26 < MIN_AVG_VALUE_IDR:
+            
+        # --- PERUBAHAN: ASUMSI 22 CANDLE 15-MENIT PER HARI ---
+        if vol_ma_now * price_now * 22 < MIN_AVG_VALUE_IDR:
             continue
 
         vol_ratio = vol_now / vol_ma_now
@@ -184,7 +200,8 @@ for stock in stocks:
                 regular_candidates.append(entry)
 
     except Exception as e:
-        print(f"Error {stock}: {e}")
+        # Menangkap error individu agar loop tidak berhenti total
+        pass
 
 # ─────────────────────────────────────────────
 # SUSUN PESAN & KIRIM TELEGRAM
@@ -243,8 +260,12 @@ if regular_candidates:
 
 print(message)
 
-requests.get(
-    f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-    params={"chat_id": CHAT_ID, "text": message},
-    timeout=10,
-)
+# Kirim ke Telegram (Aman diletakkan di try-except agar tidak crash kalau gagal jaringan)
+try:
+    requests.get(
+        f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+        params={"chat_id": CHAT_ID, "text": message},
+        timeout=10,
+    )
+except Exception as e:
+    print(f"Gagal kirim pesan ke Telegram: {e}")
